@@ -30,3 +30,41 @@ Pair-wise GSB 标注任务仓库（第 17 批 / 267）。
 1. 在本仓库中完成提示词要求的全部内容。
 2. `./mvnw -q verify` 必须通过。
 3. 完成后在所属分支（A 或 B）上提交，产物快照的父提交必须是初始环境快照。
+
+---
+
+## 实现说明（分支 A）
+
+### 组件
+
+| 类 | 说明 |
+|----|------|
+| `com.example.crdt.GCounter` | 只增计数器：每副本一个槽位，合并逐副本取 `max` |
+| `com.example.crdt.PNCounter` | 可增减计数器：两个 G-Counter（P/N），值为 `P - N` |
+| `com.example.crdt.ORSet` | 可增删集合：增删均携带唯一标记（tag），add-wins 语义 |
+| `com.example.crdt.GossipCluster` | 反熵收敛模拟器：全互联/随机两种交换策略，统计轮次与合并次数 |
+| `com.example.crdt.CrdtStats` | 副本统计快照：状态大小、合并次数 |
+
+### 收敛与容错
+
+- 所有组件均为状态型 CvRDT：`merge` 满足**交换律、结合律、幂等性**（`MergePropertiesTest` 随机化验证），因此乱序消息、重复投递、部分投递都不影响最终一致。
+- 收敛轮次（`ConvergenceTest` 实测输出）：更新停止后**全互联交换恰好 1 轮收敛**；随机单消息投递在 5 副本下约 4–9 轮收敛（上限 200 轮断言兜底）。
+- 状态压缩：`drainDelta()` 把多次增量折叠为紧凑状态（G-Counter 每副本至多 1 个条目）；`ORSet.compact()` 剔除已被墓碑覆盖的冗余 tag。压缩后合并结果与逐条合并完全一致（`DeltaCompressionTest`）。
+- 注意：G-Counter 的增量消息携带本槽位**累计值**而非当次增量——合并语义是取 max，只带增量会在乱序/压缩时丢失更新。
+
+### OR-Set 并发增删语义（add-wins）
+
+删除只作用于删除方**已观测到**的唯一标记，墓碑（removes）只增不减：
+
+- **先见后删**：B 同步到 A 对 x 的新增后再删除 → 合并后 x 被删除。
+- **并发增删**：B 删除 x 的同时 A 并发新增 x（B 未观测到该 tag）→ 合并后 x 存活，并发删除不覆盖并发新增。
+- **删后再增**：删除之后再次 `add` 产生全新 tag → 元素复活。
+- **双向并发新增**：两个副本各自 `add("x")` 产生不同 tag，一方删除只抹掉自己观测到的 tag，另一方的新增存活。
+
+以上语义由 `ConcurrentSemanticsTest` 逐一验证。
+
+### 运行
+
+```bash
+./mvnw -q verify   # 或 mvn -q verify
+```
