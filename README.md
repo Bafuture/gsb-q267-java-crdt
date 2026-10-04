@@ -19,6 +19,40 @@ Pair-wise GSB 标注任务仓库（第 17 批 / 267）。
 ./mvnw -q verify
 ```
 
+## 实现说明
+
+源码位于 `src/main/java/com/example/crdt/`，测试位于 `src/test/java/com/example/crdt/`。
+
+### 组件
+
+| 类 | 说明 |
+|----|------|
+| `GCounter` | 只增计数器。状态为 `副本ID -> 计数`，合并逐副本取最大值，总值为各槽位之和。 |
+| `PNCounter` | 可增减计数器。由两个 G-Counter（增量 P、减量 N）构成，值 = P - N。 |
+| `ORSet<E>` | 可增删集合（Observed-Remove Set，add-wins）。新增生成全局唯一标签，删除只清除已观察到的标签（墓碑）。 |
+| `GossipSimulator` | 收敛模拟器：副本随机配对、乱序双向交换状态，统计收敛轮次。 |
+| `CrdtStats` | 副本统计：状态大小、累计合并次数。 |
+
+### 并发增删同一元素的语义（add-wins）
+
+- 每次 `add(e)` 生成一个全局唯一标签（`replicaId:seq:UUID`）放入 `adds[e]`。
+- `remove(e)` 只把本副本**已观察到**的标签加入墓碑集合 `removes[e]`。
+- 合并 = `adds` 与 `removes` 分别做集合并集，因此乱序、重复合并结果一致（交换律 + 幂等）。
+- 并发场景：副本 B 删除 `e` 的同时副本 A 并发新增 `e`，A 的新标签不在 B 的墓碑里，
+  合并后该标签存活 —— **并发删除不覆盖并发新增**；删除后再新增同理。
+
+### 状态压缩
+
+`GCounter.compress` / `PNCounter.compress` / `ORSet.compress` 把多个增量状态
+合并为一个紧凑状态；压缩后合并与逐个合并原始增量结果完全等价（由结合律保证）。
+
+### 收敛性验证
+
+`ConvergenceTest` 让 5 个副本各自并发执行随机操作，再用 `GossipSimulator`
+以随机顺序交换状态，断言有限轮内全部副本状态一致并打印收敛轮次与统计；
+`convergenceIsIndependentOfGossipOrder` 用 10 个不同随机种子证明收敛结果与
+gossip 顺序无关。
+
 ## 任务提示词
 
 以下为本题完整的 User Prompt 原文，两次执行必须使用完全相同的文本。
